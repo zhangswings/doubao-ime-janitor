@@ -16,6 +16,8 @@
 --
 -- v6 变更：菜单栏创建全防护（失败原因写日志，不再中断配置加载）；
 --   个性化设置外置为 janitor-config.lua。
+-- v6.1 变更：菜单栏图标改为内置 template PNG（SF Symbol 运行时接口不可用，
+--   emoji 只能兜底），base64 内嵌，脚本完全自包含。
 -- ====================================================================
 local log = hs.logger.new("ImeJanitor", "info")
 local alert = hs.alert
@@ -49,6 +51,22 @@ local config = {
     launchAtLogin = true,    -- 开机自启
 }
 
+-- 中文键名映射：janitor-config.lua 里可以用中文键（也兼容英文键）
+local CONFIG_KEY_ALIASES = {
+    ["语音输入法"] = "targetSourceID",
+    ["打字输入法"] = "homeSourceID",
+    ["主力输入法"] = "homeSourceID",
+    ["回切最短秒"] = "backHomeDelayMin",
+    ["回切系数"] = "backHomeDelayFactor",
+    ["回切最长秒"] = "backHomeDelayMax",
+    ["轮询间隔秒"] = "pollInterval",
+    ["日志路径"] = "debugLogPath",
+    ["豆包设置路径"] = "doubaoSettingsApp",
+    ["菜单栏图标"] = "menuBarEnabled",
+    ["启动提示"] = "alertOnStart",
+    ["开机自启"] = "launchAtLogin",
+}
+
 -- ============ 加载用户覆盖配置 ~/.hammerspoon/janitor-config.lua ============
 local userConfigPath = hs.configdir .. "/janitor-config.lua"
 local userConfigLoaded = false
@@ -59,7 +77,7 @@ if uf then
     local ok, overrides = pcall(dofile, userConfigPath)
     if ok and type(overrides) == "table" then
         for k, v in pairs(overrides) do
-            config[k] = v
+            config[CONFIG_KEY_ALIASES[k] or k] = v
         end
         userConfigLoaded = true
     elseif not ok then
@@ -190,6 +208,10 @@ hs.urlevent.bind("doubaoime", function(_, paramsOrQuery)
 end)
 
 -- ============ 菜单栏图标与快捷菜单（每一步都有防护，失败不中断配置） ============
+
+-- 内置菜单栏图标：18pt SF Symbol「mic.fill」渲染的 template PNG（黑色+透明，自动适配深浅色菜单栏）
+local MENUBAR_ICON_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAABIAAAASCAYAAABWzo5XAAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAEqADAAQAAAABAAAAEgAAAACaqbJVAAABWklEQVQ4EZ2TSytGURSGt0u5RQgpclcyISPFgKl/wMQfkR8gQ8VAShmYGSgmDEyUoZRMZSBFlNsAH8+r5Vz2t7/j9K16Wuusd6119lnt41xp60Q6hHc4hWEoy3bo+oBv8ydlTaHpxYZokPiEDghaZTDrXBX5ek8L5aKSUoNUUBFVxUEo96tmDYrbc0T+oG16Jv7p60HfhYasulfEedA+/pac9P3kp0BXohsi809Ui6I3qfkrqooDXYc6UF1qX/6gJwraoQBXkLRbHpL6c1L0B10jjoDyB/AIOp2ajkF3axQeLMaFbZm03jwGbbAKR7AOWvIgXMImZNoA6g3sQR+0QCM0QxdswD1MQspSCzNlDr8Gb6DT3EErzIJ+ZJ16C3LZEFUrcAba0QVo+DjkNi26xtCnatCMPSuvO1Zk1UUZ53rJLYA+u8l0PU9bvI8/tzjTLaIWQCcJsRTq/gEtDEXmTrSW2QAAAABJRU5ErkJggg=="
+
 local function setupMenuBar()
     if not config.menuBarEnabled then
         return
@@ -202,14 +224,25 @@ local function setupMenuBar()
     end
 
     local iconSet = false
-    local okImg, icon = pcall(function() return hs.image.imageFromName("mic.fill") end)
+    local okImg, icon = pcall(function()
+        -- hs.image 没有 imageFromData 接口，先把内嵌 PNG 解码落盘再加载
+        local iconPath = os.getenv("TMPDIR") .. "/doubao-ime-janitor-menubar.png"
+        local f = io.open(iconPath, "wb")
+        f:write(hs.base64.decode(MENUBAR_ICON_PNG_B64))
+        f:close()
+        local img = hs.image.imageFromPath(iconPath)
+        if img == nil then
+            img = hs.image.imageFromURL("file://" .. iconPath)
+        end
+        return img
+    end)
     if okImg and icon ~= nil then
         local okSet, setErr = pcall(function() iconSet = bar:setIcon(icon, true) end)
         if not okSet then
             trace("菜单栏 setIcon 失败: " .. tostring(setErr))
         end
     elseif not okImg then
-        trace("读取 SF Symbol 图标失败: " .. tostring(icon))
+        trace("解码内置图标失败: " .. tostring(icon))
     end
 
     if not iconSet then
@@ -235,7 +268,7 @@ local function setupMenuBar()
         trace("菜单栏 setMenu 失败: " .. tostring(menuErr))
     end
 
-    trace("菜单栏已创建：" .. (iconSet and "SF Symbol(mic.fill)" or "emoji 兜底"))
+    trace("菜单栏已创建：" .. (iconSet and "内置 PNG 模板图标" or "emoji 兜底"))
 end
 setupMenuBar()
 
