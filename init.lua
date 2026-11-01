@@ -9,6 +9,10 @@
 --   改为轮询麦克风占用状态：有任何麦克风在录音就绝不切输入法；
 --   录音结束后延迟切换（给上屏 + 智能文字整理留时间）。
 --   对所有触发方式（右⌘长按 / FN / 免按模式）天然有效。
+--
+-- v5.2：回切延迟按录音时长自适应——
+--   长语音的「智能文字整理」润色要数秒，固定短延迟会打断提交，
+--   导致预编辑文字（下划线）悬空不消失。延迟 = clamp(1.2, 0.3×录音秒数, 6)。
 -- ============================================
 local log = hs.logger.new("RightCmdIME", "debug")
 local alert = hs.alert
@@ -20,15 +24,17 @@ local TARGET_SOURCE_ID = "com.bytedance.inputmethod.doubaoime.pinyin"
 local HOME_SOURCE_ID = "com.tencent.inputmethod.wetype.pinyin"
 
 -- 录音结束后等多久回微信输入法（秒）
--- 1.2s：上屏是松手瞬间完成的，这里主要给"智能文字整理"留缓冲；
--- 太短可能偶尔打断长文本的润色（润色失败原文保留，不会丢字）
-local BACK_HOME_DELAY = 1.2
+-- 短语音基准 1.2s；长语音按 0.3 × 录音秒数给"智能文字整理"留缓冲，封顶 6s
+local BACK_HOME_DELAY_MIN = 1.2
+local BACK_HOME_DELAY_FACTOR = 0.3
+local BACK_HOME_DELAY_MAX = 6.0
 
 -- 轮询间隔（秒）：越小，录音结束检测越跟手
 local POLL_INTERVAL = 0.25
 
 -- 状态变量
 local isRecording = false
+local recordingStartedAt = nil
 local backHomeTimer = nil
 
 -- 调试日志：同时进 Hammerspoon 控制台和文件
@@ -60,11 +66,11 @@ local function backHome(reason)
     end
 end
 
-local function scheduleBackHome(reason)
+local function scheduleBackHome(delay, reason)
     if backHomeTimer then
         return
     end
-    backHomeTimer = hs.timer.doAfter(BACK_HOME_DELAY, function()
+    backHomeTimer = hs.timer.doAfter(delay, function()
         backHomeTimer = nil
         if not isRecording and hs.keycodes.currentSourceID() == TARGET_SOURCE_ID then
             backHome(reason)
@@ -89,12 +95,15 @@ local function pollTick()
     if recording ~= isRecording then
         isRecording = recording
         if recording then
+            recordingStartedAt = hs.timer.secondsSinceEpoch()
             trace("录音开始（麦克风占用）——豆包会话保护中")
             cancelBackHomeTimer()
         else
-            trace("录音结束")
+            local duration = recordingStartedAt and (hs.timer.secondsSinceEpoch() - recordingStartedAt) or 0
+            local delay = math.min(BACK_HOME_DELAY_MAX, math.max(BACK_HOME_DELAY_MIN, BACK_HOME_DELAY_FACTOR * duration))
+            trace(string.format("录音结束（时长 %.1f 秒），%.1f 秒后回微信输入法", duration, delay))
             if hs.keycodes.currentSourceID() == TARGET_SOURCE_ID then
-                scheduleBackHome("录音结束回切")
+                scheduleBackHome(delay, "录音结束回切")
             end
         end
     end
@@ -102,7 +111,7 @@ local function pollTick()
     -- 兜底：非录音状态下豆包滞留（漏掉的事件/残留状态），安排回切
     if not isRecording and not backHomeTimer
         and hs.keycodes.currentSourceID() == TARGET_SOURCE_ID then
-        scheduleBackHome("豆包滞留回切")
+        scheduleBackHome(BACK_HOME_DELAY_MIN, "豆包滞留回切")
     end
 end
 
