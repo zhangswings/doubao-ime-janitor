@@ -19,11 +19,13 @@ local TARGET_SOURCE_ID = "com.bytedance.inputmethod.doubaoime.pinyin"
 -- 日常打字输入法：一切结束后回到这里
 local HOME_SOURCE_ID = "com.tencent.inputmethod.wetype.pinyin"
 
--- 录音结束后等多久回微信输入法（秒）：给上屏 + 智能文字整理留时间
-local BACK_HOME_DELAY = 2.5
+-- 录音结束后等多久回微信输入法（秒）
+-- 1.2s：上屏是松手瞬间完成的，这里主要给"智能文字整理"留缓冲；
+-- 太短可能偶尔打断长文本的润色（润色失败原文保留，不会丢字）
+local BACK_HOME_DELAY = 1.2
 
--- 轮询间隔（秒）
-local POLL_INTERVAL = 0.5
+-- 轮询间隔（秒）：越小，录音结束检测越跟手
+local POLL_INTERVAL = 0.25
 
 -- 状态变量
 local isRecording = false
