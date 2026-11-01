@@ -13,6 +13,10 @@
 -- v5.2：回切延迟按录音时长自适应——
 --   长语音的「智能文字整理」润色要数秒，固定短延迟会打断提交，
 --   导致预编辑文字（下划线）悬空不消失。延迟 = clamp(1.2, 0.3×录音秒数, 6)。
+--
+-- v5.3：新增菜单栏图标与快捷菜单——
+--   图标用 SF Symbol 麦克风（template 图，自动适配深浅色菜单栏），
+--   兜底退回 emoji。菜单提供：强制回微信输入法 / 打开豆包设置 / 重载脚本。
 -- ============================================
 local log = hs.logger.new("RightCmdIME", "debug")
 local alert = hs.alert
@@ -31,6 +35,9 @@ local BACK_HOME_DELAY_MAX = 6.0
 
 -- 轮询间隔（秒）：越小，录音结束检测越跟手
 local POLL_INTERVAL = 0.25
+
+-- 豆包输入法设置应用路径（菜单栏快捷入口用）
+local DOUBAO_SETTINGS_APP = "/Library/Input Methods/DoubaoIme.app/Contents/Applications/DoubaoImeSettings.app"
 
 -- 状态变量
 local isRecording = false
@@ -148,6 +155,37 @@ hs.urlevent.bind("doubaoime", function(_, paramsOrQuery)
         trace("未知调试命令: " .. tostring(cmd))
     end
 end)
+
+-- 菜单栏图标与快捷菜单
+local function setupMenuBar()
+    local bar = hs.menubar.new()
+    if not bar then
+        trace("菜单栏创建失败")
+        return
+    end
+
+    local icon = nil
+    pcall(function() icon = hs.image.imageFromName("mic.fill") end)
+    if icon ~= nil then
+        bar:setIcon(icon, true)  -- template 图，自动适配深浅色菜单栏
+    else
+        bar:setTitle("🎙")
+    end
+
+    bar:setMenu(function()
+        return {
+            { title = "强制回微信输入法", fn = function() backHome("菜单手动回切") end },
+            { title = "打开豆包输入法设置", fn = function()
+                hs.execute('open "' .. DOUBAO_SETTINGS_APP .. '"')
+            end },
+            { title = "-" },
+            { title = "重载脚本", fn = function() hs.reload() end },
+        }
+    end)
+
+    trace("菜单栏图标已创建：" .. (icon ~= nil and "SF Symbol(mic.fill)" or "emoji 兜底"))
+end
+setupMenuBar()
 
 -- 开机自启，后台常驻
 hs.autoLaunch(true)
