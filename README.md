@@ -59,24 +59,24 @@ open -a Hammerspoon     # 首次启动按提示授予「辅助功能」权限
 
 ## 配置
 
-所有个性化设置都放在 `~/.hammerspoon/janitor-config.lua`（首次 `./install.sh` 时会自动从示例生成），**不需要改主脚本**。只写想覆盖的字段：
+所有个性化设置都放在 `~/.hammerspoon/janitor-config.lua`（首次 `./install.sh` 时会自动从示例生成），**不需要改主脚本**。键名支持中文（也兼容英文），只写想覆盖的字段：
 
 ```lua
 -- ~/.hammerspoon/janitor-config.lua
 return {
     -- 换成你自己的输入法源 ID（查法见 FAQ）
-    homeSourceID = "com.tencent.inputmethod.wetype.pinyin",
-    targetSourceID = "com.bytedance.inputmethod.doubaoime.pinyin",
+    ["语音输入法"] = "com.bytedance.inputmethod.doubaoime.pinyin",   -- 豆包输入法
+    ["打字输入法"] = "com.tencent.inputmethod.wetype.pinyin",        -- 微信输入法
 
-    -- 回切节奏：实际延迟 = clamp(min, factor × 录音秒数, max)
-    backHomeDelayMin = 1.2,     -- 短语音基准
-    backHomeDelayFactor = 0.3,  -- 长语音放大系数（给智能润色留时间）
-    backHomeDelayMax = 6.0,     -- 上限
+    -- 回切节奏：实际延迟 = clamp(回切最短秒, 回切系数 × 录音秒数, 回切最长秒)
+    ["回切最短秒"] = 1.2,     -- 短语音基准
+    ["回切系数"]   = 0.3,     -- 长语音放大系数（给智能润色留时间）
+    ["回切最长秒"] = 6.0,     -- 上限
 
-    pollInterval = 0.25,        -- 麦克风轮询间隔（秒）
-    menuBarEnabled = true,      -- 菜单栏图标
-    alertOnStart = true,        -- 启动提示
-    launchAtLogin = true,       -- 开机自启
+    ["轮询间隔秒"] = 0.25,    -- 麦克风轮询间隔（秒）
+    ["菜单栏图标"] = true,    -- 菜单栏图标与快捷菜单
+    ["启动提示"]   = true,    -- 启动时屏幕提示
+    ["开机自启"]   = true,    -- 开机自启
 }
 ```
 
@@ -86,7 +86,7 @@ return {
 
 | 你的偏好 | 建议 |
 |---|---|
-| 说完马上能打字（润色可以牺牲） | `backHomeDelayFactor = 0.1`、`backHomeDelayMax = 2.0`，或直接关闭豆包的「智能文字整理」 |
+| 说完马上能打字（润色可以牺牲） | `["回切系数"] = 0.1`、`["回切最长秒"] = 2.0`，或直接关闭豆包的「智能文字整理」 |
 | 长文本要完整润色（能等几秒） | 保持默认（长语音最多等 6 秒） |
 | 经常一边开会录音一边打字 | 无需担心——任何 App 录音期间管家都不会动输入法 |
 
