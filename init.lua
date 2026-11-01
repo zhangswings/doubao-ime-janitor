@@ -1,17 +1,21 @@
 -- ============================================
--- Right Command -> 切到豆包输入法 -> 双击左 Option 唤起语音 -> 结束后回到微信输入法
--- 基于 https://github.com/Paxxs/Doubao-ime-hammerspoon 适配本机：
+-- Right Command -> 切到豆包输入法 -> 按住左 Option 说话 -> 松开上屏 -> 回到微信输入法
+-- 基于 https://github.com/Paxxs/Doubao-ime-hammerspoon 适配本机
 --   日常打字 = 微信输入法(HOME)，豆包输入法只用于语音(TARGET)
---   v2 修复：实测发现语音结束时豆包会把输入源"劫持"回自己，
---   原版"恢复上一次输入法"的记录会被污染（记成豆包），导致永远卡在豆包。
---   改为：
---     1. 语音会话结束后强制回 HOME（微信输入法）
---     2. 监听输入源变化，凡是"非脚本主动"切到豆包（语音结束劫持 / FN 触发），
---        延迟 1 秒自动回 HOME
---     3. 松开右 Command 3 秒后仍在豆包则兜底回 HOME
+--
+-- v3：语音手势从"双击 Option"改为"按住 Option"（push-to-talk）
+--   原因：双击模式下豆包把语音文字放在预编辑态(带下划线)，脚本切走输入法时
+--   未确认文字会被系统丢弃导致丢字；而"按住说话、松开上屏"是豆包原生交互，
+--   松开瞬间文字即提交，之后切回微信输入法就安全了。
+--
+--   右 Command 按下 = 切豆包 + 按下左 Option（开始录音）
+--   右 Command 松开 = 松开左 Option（豆包上屏）→ 1.5 秒后回微信输入法
 -- ============================================
 local log = hs.logger.new("RightCmdIME", "debug")
 local alert = hs.alert
+
+-- 语音手势："hold"=按住说话(push-to-talk，推荐) / "doubletap"=双击触发
+local VOICE_GESTURE = "hold"
 
 -- 目标输入法：豆包（语音用）
 local TARGET_SOURCE_ID = "com.bytedance.inputmethod.doubaoime.pinyin"
@@ -19,19 +23,16 @@ local TARGET_SOURCE_ID = "com.bytedance.inputmethod.doubaoime.pinyin"
 -- 日常打字输入法：语音结束后回到这里
 local HOME_SOURCE_ID = "com.tencent.inputmethod.wetype.pinyin"
 
--- 右侧 Command 按下后，多久再执行双击左 Option（秒）
+-- 右 Command 按下后，等多久再按下左 Option（秒）：给输入法切换留时间
 local OPTION_PRESS_DELAY = 0.30
 
--- 两次 Option 点击之间的间隔（秒）
-local OPTION_DOUBLE_TAP_INTERVAL = 0.18
+-- 松开右 Command 后，延迟多久回微信输入法（秒）：给豆包上屏留时间
+local RESTORE_IME_DELAY = 1.5
 
--- 松开右 Command 后的兜底恢复延迟（秒）：仍在豆包就强制回 HOME
-local RESTORE_IME_DELAY = 3.0
-
--- 被劫持到豆包后，等多久自动回 HOME（秒）
+-- 被切到豆包（非脚本主动）后，等多久自动回微信输入法（秒）
 local BACK_HOME_DELAY = 1.0
 
--- 自己主动切到豆包后的保护期（秒），期内不算被劫持
+-- 自己主动切到豆包后的保护期（秒），期内不算"被劫持"
 local HIJACK_GRACE = 1.5
 
 -- 物理按键 keycode
@@ -39,6 +40,7 @@ local KEYCODE_RIGHT_CMD = 54
 
 -- 状态变量
 local rightCmdIsDown = false
+local optionIsDown = false
 local optionPressTimer = nil
 local restoreImeTimer = nil
 local backHomeTimer = nil
@@ -96,7 +98,7 @@ local function scheduleBackHome(reason)
 end
 
 -- 输入源变化监听：豆包在"非脚本主动"的情况下成为当前输入法，
--- 说明是语音结束劫持或 FN 等外部触发，稍后自动回微信输入法
+-- 说明是外部触发（FN 语音等），稍后自动回微信输入法
 local function onInputSourceChanged()
     local id = hs.keycodes.currentSourceID()
     if id == TARGET_SOURCE_ID then
@@ -108,21 +110,6 @@ local function onInputSourceChanged()
     else
         cancelBackHomeTimer()
     end
-end
-
-local function tapLeftOptionOnce()
-    hs.eventtap.event.newKeyEvent(hs.keycodes.map.alt, true):post()
-    hs.eventtap.event.newKeyEvent(hs.keycodes.map.alt, false):post()
-end
-
-local function doubleTapLeftOption()
-    trace("开始模拟双击左 Option")
-    tapLeftOptionOnce()
-
-    hs.timer.doAfter(OPTION_DOUBLE_TAP_INTERVAL, function()
-        tapLeftOptionOnce()
-        trace("已完成双击左 Option")
-    end)
 end
 
 local function switchToDoubao()
@@ -143,16 +130,20 @@ local function switchToDoubao()
     end
 end
 
-local function scheduleFallbackRestore()
+-- 兜底：语音流程没走完或劫持没发生，也要回到微信输入法
+local function scheduleFallbackRestore(delay, reason)
     cancelRestoreImeTimer()
-
-    restoreImeTimer = hs.timer.doAfter(RESTORE_IME_DELAY, function()
+    restoreImeTimer = hs.timer.doAfter(delay, function()
         restoreImeTimer = nil
         if hs.keycodes.currentSourceID() == TARGET_SOURCE_ID and not rightCmdIsDown then
-            trace(string.format("松开 %.1f 秒后仍在豆包，兜底回微信输入法", RESTORE_IME_DELAY))
-            backHome("松开后兜底恢复")
+            trace(string.format("%.1f 秒后仍在豆包，兜底回微信输入法", delay))
+            backHome(reason)
         end
     end)
+end
+
+local function postOption(down)
+    hs.eventtap.event.newKeyEvent(hs.keycodes.map.alt, down):post()
 end
 
 local function onRightCmdDown()
@@ -168,15 +159,17 @@ local function onRightCmdDown()
 
     switchToDoubao()
 
-    cancelOptionTimer()
-    optionPressTimer = hs.timer.doAfter(OPTION_PRESS_DELAY, function()
-        optionPressTimer = nil
-
-        if rightCmdIsDown then
-            trace("按住超过 0.30 秒，提前双击左 Option")
-            doubleTapLeftOption()
-        end
-    end)
+    if VOICE_GESTURE == "hold" then
+        cancelOptionTimer()
+        optionPressTimer = hs.timer.doAfter(OPTION_PRESS_DELAY, function()
+            optionPressTimer = nil
+            if rightCmdIsDown and not optionIsDown then
+                optionIsDown = true
+                trace("模拟按住左 Option（开始语音）")
+                postOption(true)
+            end
+        end)
+    end
 end
 
 local function onRightCmdUp()
@@ -187,11 +180,30 @@ local function onRightCmdUp()
     rightCmdIsDown = false
     trace("右 Command 松开")
 
-    cancelOptionTimer()
-    doubleTapLeftOption()
-
-    -- 兜底：若语音没触发或劫持没发生，也要回到微信输入法
-    scheduleFallbackRestore()
+    if VOICE_GESTURE == "hold" then
+        cancelOptionTimer()
+        if optionIsDown then
+            optionIsDown = false
+            trace("模拟松开左 Option（豆包上屏）")
+            postOption(false)
+            -- 松开即上屏，给 1.5 秒提交时间后回微信输入法
+            scheduleFallbackRestore(RESTORE_IME_DELAY, "语音结束自动回切")
+        else
+            -- 轻点（不足 0.30 秒），没有进入语音，直接安排回微信输入法
+            trace("轻点右 Command（未进入语音），安排回微信输入法")
+            scheduleFallbackRestore(0.5, "轻点后回切")
+        end
+    else
+        -- doubletap 模式：保持原插件行为（松开时模拟双击）
+        trace("模拟双击左 Option")
+        postOption(true)
+        postOption(false)
+        hs.timer.doAfter(0.18, function()
+            postOption(true)
+            postOption(false)
+        end)
+        scheduleFallbackRestore(3.0, "双击模式兜底回切")
+    end
 end
 
 -- 只处理右 Command 的 flagsChanged，根据内部状态翻转判断按下/松开，
@@ -232,9 +244,7 @@ _G.rightCmdWatcher:start()
 -- 输入源变化监听
 hs.keycodes.inputSourceChanged(onInputSourceChanged)
 
--- 调试通道：
---   open "hammerspoon://doubaoime?cmd=check|switch|home"
---   check=查看当前输入源  switch=切到豆包  home=强制回微信输入法
+-- 调试通道：open "hammerspoon://doubaoime?cmd=check|switch|home"
 hs.urlevent.bind("doubaoime", function(_, paramsOrQuery)
     local cmd = nil
     if type(paramsOrQuery) == "table" then
@@ -258,7 +268,10 @@ hs.urlevent.bind("doubaoime", function(_, paramsOrQuery)
     end
 end)
 
--- 启动时如果卡在豆包（比如上次语音劫持后重启），自动回微信输入法
+-- 防御：万一脚本重载时 Option 还处于"按住"状态，先补一个松开，避免系统修饰键卡死
+postOption(false)
+
+-- 启动时如果卡在豆包（比如上次语音后重启），自动回微信输入法
 if hs.keycodes.currentSourceID() == TARGET_SOURCE_ID then
     scheduleBackHome("启动时清理")
 end
@@ -269,5 +282,5 @@ hs.autoLaunch(true)
 -- 加载 ipc，让 brew 链接的 hs 命令行可用
 pcall(function() require("hs.ipc") end)
 
-alert.show("RightCmdIME v2 脚本已启动", 2)
-trace("========== 脚本已启动(v2)，辅助功能权限: " .. tostring(hs.accessibilityState()) .. " ==========")
+alert.show("RightCmdIME v3 脚本已启动（按住说话模式）", 2)
+trace("========== 脚本已启动(v3, 手势=" .. VOICE_GESTURE .. ")，辅助功能权限: " .. tostring(hs.accessibilityState()) .. " ==========")
